@@ -1,0 +1,77 @@
+---
+title: "susieR::susie_rss Optimation"
+author: "Yunshen Bai"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+The `susieR` package introduces a simple approach for conducting variable selection in multiple regression. The methods implemented here are particularly well-suited to settings where some of the X variables are highly correlated, and the true effects are highly sparse. `susie_rss` performs variable selection under a sparse Bayesian multiple linear regression of Y on X using the z-scores from standard univariate regression of Y on each column of X. In this report, we will perform the line profiling to find the most time and memory consuming part and try to optimize it.
+
+This is the data set we will use in this report.
+```{r}
+setwd("D:/Jupyter_notebook/susie_rss")
+ss_qc=read.csv("D:/Jupyter_notebook/susie_rss/ss_qc.csv",header = T)
+LD=read.csv("D:/Jupyter_notebook/susie_rss/LD.csv",header = F)
+```
+
+Then, we perform the line profiling to find out the part that spend most of memory and time. 
+
+```{r,warning=FALSE}
+library(profvis)
+p=profvis({
+  susieR:::susie_rss(as.matrix(ss_qc$z),as.matrix(LD), n = 1138870,var_y, z_ld_weight = 0, estimate_residual_variance = FALSE, 
+            prior_variance = 50, check_prior = TRUE, max_iter = 1000,verbose = TRUE )
+})
+p
+
+```
+```{r,include=FALSE}
+htmlwidgets::saveWidget(p, "./profile_susieR_susie_rss.html")
+```
+
+
+From the result of line profiling on `susieR:::susie_rss` function, the most time and memory consuming part in it is `cov2cor` function. Therefore, we decided to try use other implementations to `cov2cor` functions to make it run faster. Luckily, we found an alternative implementations, `correlateR::cov2corArma()` function, may worth tying. 
+
+In this report, we use `microbenchmark` package to compare the execution time of `correlateR::cov2corArma` and `cov2cor`.
+
+```{r,warning=FALSE}
+X=read.csv("./cov2cor.csv",header = F)
+library(microbenchmark)
+microbenchmark(A = correlateR::cov2corArma(as.matrix(X)),
+              B = cov2cor(as.matrix(X)))
+
+```
+From the result of `microbenchmark` function, when dealing with the same matrix, the average time used in `cov2cor` is more than three times than `correlateR::cov2corArma`. Therefore, it's reasonable to replace the `cov2cor` function with `correlateR::cov2corArma` in `susieR_rss` function.
+
+Next, we will use the same dataset used in previous to perform the line profiling and see if the optimized `susie_rss` function has a better performance. 
+
+
+```{r,message=FALSE}
+sourceFolder <- function(folder, recursive = FALSE, ...) 
+{ 
+  files <- list.files(folder, pattern = "[.][rR]$", 
+                      full.names = TRUE, recursive = recursive)
+  if (!length(files))
+    stop(simpleError(sprintf('No R files in folder "%s"', folder)))
+  src <- invisible(lapply(files, source, ...))
+  message(sprintf('%s files sourced from folder "%s"', length(src), folder))
+}
+sourceFolder("./R/R", recursive = TRUE)
+```
+
+```{r}
+
+p2=profvis({
+  susie_rss(as.matrix(ss_qc$z),as.matrix(LD), n = 1138870,var_y, z_ld_weight = 0, estimate_residual_variance = FALSE, 
+            prior_variance = 50, check_prior = TRUE, max_iter = 1000,verbose = TRUE )
+})
+p2
+```
+```{r,include=FALSE}
+htmlwidgets::saveWidget(p2, "./profile_susie_rss.html")
+```
+
+From the above result, the optimized `susie_rss` spend about 1000 MB less memory and 1900 ms less time compared to original `susie_rss` function. Therefore, we believe optimized `susie_rss` has a better performance. 
+
+
+
